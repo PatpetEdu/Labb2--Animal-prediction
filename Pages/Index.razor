@@ -1,0 +1,207 @@
+﻿@page "/"
+@inject CustomVisionPredictionClient PredictionClient
+@using Microsoft.Azure.CognitiveServices.Vision.CustomVision.Prediction
+@using Microsoft.Azure.CognitiveServices.Vision.CustomVision.Prediction.Models
+@using Microsoft.AspNetCore.Components.Forms
+
+<h1 class="text-center my-4">Bildklassificering</h1>
+
+<div class="container">
+    <div class="row">
+        <div class="col-md-6">
+            <div class="card mb-4 shadow-sm">
+                <div class="card-header">
+                    <h5 class="card-title">Klassificera från URL</h5>
+                </div>
+                <div class="card-body">
+                    <input @bind="imageUrl" placeholder="Ange bild-URL här" class="form-control mb-2" />
+                    <button @onclick="ClassifyImageUrl" class="btn btn-primary w-100">Klassificera</button>
+                    @if (urlStatusMessage != null)
+                    {
+                        <div class="alert alert-info mt-3">@urlStatusMessage</div>
+                    }
+                </div>
+            </div>
+        </div>
+
+        <div class="col-md-6">
+            <div class="card mb-4 shadow-sm">
+                <div class="card-header">
+                    <h5 class="card-title">Ladda upp en bildfil</h5>
+                </div>
+                <div class="card-body">
+                    <InputFile OnChange="HandleFileUpload" class="form-control" />
+                    @if (statusMessage != null)
+                    {
+                        <div class="alert alert-info mt-3">@statusMessage</div>
+                    }
+                </div>
+            </div>
+        </div>
+    </div>
+
+    @if (isProcessing)
+    {
+        <div class="text-center my-4">
+            <div class="spinner-border text-primary" role="status">
+                <span class="visually-hidden">Laddar...</span>
+            </div>
+        </div>
+    }
+
+    @if (!string.IsNullOrEmpty(imageUrl))
+    {
+        <div class="card mb-4 shadow-sm">
+            <div class="card-body">
+                <img src="@imageUrl" alt="URL Image Preview" class="img-fluid rounded" />
+            </div>
+        </div>
+    }
+
+    @if (predictionResult != null)
+    {
+        <div class="card shadow-sm">
+            <div class="card-header">
+                <h5 class="card-title">Resultat</h5>
+            </div>
+            <div class="card-body">
+                @if (predictionResult.Predictions.Max(p => p.Probability) < 0.85)
+                {
+                    <div class="alert alert-warning">Resultatet är väldigt osäkert. Inget identifierat objekt har en sannolikhet över 85%.</div>
+                }
+
+                <table class="table table-striped">
+                    <thead>
+                        <tr>
+                            <th>Tag</th>
+                            <th>Probability</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var prediction in predictionResult.Predictions)
+                        {
+                            <tr>
+                                <td>@prediction.TagName</td>
+                                <td style="color:@(prediction.Probability > 0.5 ? "green" : "red")">
+                                    @(prediction.Probability.ToString("P1"))
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    }
+
+    @if (predictionHistory.Count > 0)
+    {
+        <div class="card shadow-sm mt-4">
+            <div class="card-header">
+                <h5 class="card-title">Historik av senaste sökningar</h5>
+            </div>
+            <div class="card-body">
+                <table class="table table-striped">
+                    <thead>
+                        <tr>
+                            <th>Bild</th>
+                            <th>Tag</th>
+                            <th>Probability</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var historyItem in predictionHistory)
+                        {
+                            @foreach (var prediction in historyItem.Predictions)
+                            {
+                                <tr>
+                                    <td><img src="@historyItem.ImageUrl" alt="Predicted image" class="img-thumbnail" style="width: 100px;" /></td>
+                                    <td>@prediction.TagName</td>
+                                    <td>@(prediction.Probability.ToString("P1"))</td>
+                                </tr>
+                            }
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    private ImagePrediction? predictionResult;
+    private string? statusMessage;
+    private string? urlStatusMessage;
+    private string? imageUrl;
+    private bool isProcessing = false;
+
+    // Lista för att lagra historik av tidigare predictions
+    private List<PredictionHistoryItem> predictionHistory = new List<PredictionHistoryItem>();
+
+    private async Task HandleFileUpload(InputFileChangeEventArgs e)
+    {
+        isProcessing = true;
+        statusMessage = "File selected.";
+        IBrowserFile imageFile = e.File;
+        if (imageFile != null)
+        {
+            statusMessage = "Processing file...";
+            StateHasChanged();
+
+            try
+            {
+                using var stream = imageFile.OpenReadStream(maxAllowedSize: 52428800); // 50MB limit
+
+                predictionResult = await PredictionClient.ClassifyImageAsync(
+                    Guid.Parse("e5c91bcf-44ea-42d2-bd18-319d1d945967"), "Iteration1", stream);
+
+                predictionHistory.Insert(0, new PredictionHistoryItem { Predictions = predictionResult.Predictions, ImageUrl = imageUrl });
+
+                statusMessage = "Classification complete.";
+            }
+            catch (Exception ex)
+            {
+                statusMessage = $"An error occurred: {ex.Message}";
+            }
+            finally
+            {
+                isProcessing = false;
+                StateHasChanged();
+            }
+        }
+    }
+
+    private async Task ClassifyImageUrl()
+    {
+        isProcessing = true;
+        urlStatusMessage = "Processing URL...";
+        StateHasChanged();
+
+        try
+        {
+            var imageUrlPrediction = await PredictionClient.ClassifyImageUrlAsync(
+                Guid.Parse("e5c91bcf-44ea-42d2-bd18-319d1d945967"), "Iteration1", new ImageUrl(imageUrl));
+
+            predictionResult = imageUrlPrediction;
+       
+            predictionHistory.Insert(0, new PredictionHistoryItem { Predictions = predictionResult.Predictions, ImageUrl = imageUrl });
+
+            urlStatusMessage = "Classification complete.";
+        }
+        catch (Exception ex)
+        {
+            urlStatusMessage = $"An error occurred: {ex.Message}";
+        }
+        finally
+        {
+            isProcessing = false;
+            StateHasChanged();
+        }
+    }
+
+    // klass för prediction historik
+    private class PredictionHistoryItem
+    {
+        public IList<PredictionModel> Predictions { get; set; }
+        public string ImageUrl { get; set; }
+    }
+}
